@@ -7,6 +7,7 @@
  * Uses sensor data from the Libre Hardware Monitor project
  */
 #define PLATFORM_DRIVER
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/dmi.h>
 #include <linux/hwmon.h>
@@ -124,7 +125,7 @@ static struct known_sensor_info known_sensors[] = {
 
 struct asus_wmi_sensor_info {
 	u32 cached_value;
-	u8 inboard_index;
+	//u8 inboard_index;
 };
 
 struct ec_cached_data {
@@ -148,7 +149,7 @@ struct asus_wmi_sensors {
 	struct asus_wmi_sensor_info sensors[SENSORS_PER_BOARD_MAX]; //
 
 	// UTF-16 string to pass to BRxx() WMI function
-	u16 read_arg[(ASUS_WMI_BLOCK_READ_REGISTERS_MAX * 4) + 1];
+	char read_arg[((ASUS_WMI_BLOCK_READ_REGISTERS_MAX * 4) + 1) * 2];
 	u8 read_buffer[ASUS_WMI_BLOCK_READ_REGISTERS_MAX];
 
 	struct ec_cached_data ec;
@@ -230,38 +231,52 @@ static char htoa(u8 val)
 	return 0xFF;
 }
 
-static void stoi(const char* inp, u8* out)
+static void stoi(const u8* inp, u8* out)
 {
 	u8 len = ACPI_MIN(MAX_BUF_LEN, inp[0] / 4);
-	const char* data = inp + 2;
+        const u8* data = inp + 2;
 	u8 i;
 
 	for (i = 0; i < len; ++i, data += 4)
 	{
 		out[i] = (atoh(data[0]) << 4) + atoh(data[2]);
-	}
+        }
 }
 
-static void itos(const u8* in, u8 len, u16* out)
+static void itos(const u16* in, u8 len, char* out)
 {
-	u8 i;
-	// assert(len <= 30)
-	*out++ = len * 4 + 2;
-	for (i = 0; i < len; ++i) {
-		*out++ = htoa((in[i] >> 4));
-		*out++ = htoa(in[i] & 0x0F);
-	}
+        u8 i;
+        u8 bank, index;
+
+        // assert(len <= 30)
+        *out++ = len * 8;
+        *out++ = '0';
+        for (i = 0; i < len; ++i) {
+                bank = in[i] >> 8;
+                index = in[i] & 0x00FF;
+                *out++ = htoa((bank >> 4));
+                *out++ = '0';
+                *out++ = htoa(bank & 0x0F);
+                *out++ = '0';
+                *out++ = htoa((index >> 4));
+                *out++ = '0';
+                *out++ = htoa(index & 0x0F);
+                *out++ = '0';
+        }
 }
+
 
 static int asus_wmi_block_read(struct asus_wmi_sensors* aws, u32 method_id, const u16* registers, int len)
 {
 	struct acpi_buffer input;
 	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL }; // TODO use pre-allocated buffer
 	acpi_status status;
+        union acpi_object *obj;
 
-	itos((u8*)registers, len * 2, aws->read_arg);
+	itos(registers, len, aws->read_arg);
+//         pr_debug("block read command to update %d registers: %s", len, aws->read_arg);
 	// the first byte of the BRxx() argument string has to be the string size
-	input.length = (acpi_size) aws->read_arg[0];
+	input.length = (acpi_size) aws->read_arg[0] + 1;
 	input.pointer = aws->read_arg;
 	status = wmi_evaluate_method(ASUSWMI_MGMT2_GUID, 0, method_id, &input, &output);
 	if (ACPI_FAILURE(status)) {
@@ -269,8 +284,13 @@ static int asus_wmi_block_read(struct asus_wmi_sensors* aws, u32 method_id, cons
 		return -EIO;
 	}
 
-	pr_info("ASUS WMI block read returned: %s", (char*)output.pointer);
-	stoi(output.pointer, aws->read_buffer);
+        obj = (union acpi_object*)output.pointer;
+        if (obj->type != ACPI_TYPE_BUFFER) {
+                pr_err("unexpected reply type from ASUS ACPI code");
+                acpi_os_free(output.pointer);
+		return -EIO;
+        }
+        stoi(obj->buffer.pointer, aws->read_buffer);
 	acpi_os_free(output.pointer);
 	return 0;
 }
@@ -307,7 +327,7 @@ static int update_ec_sensors(struct asus_wmi_sensors* aws)
 	read_reg_ct = 0;
 	for (sensor_ct = 0; sensor_ct < bi->sensor_count; ++sensor_ct) {
 		si = &aws->sensors[sensor_ct];
-		ki = &known_sensors[bi->sensors[si->inboard_index].index];
+		ki = &known_sensors[bi->sensors[sensor_ct].index];
 		if (ki->source != EC) {
 			continue;
 		}
@@ -344,7 +364,7 @@ static int scale_sensor_value(u32 value, int data_type) {
 	return value; // FAN_RPM and WATER_FLOW don't need scaling
 }
 
-static u8 sensor_index (const struct asus_wmi_sensors* aws, enum hwmon_sensor_types type, int channel)
+static u8 find_sensor_index (const struct asus_wmi_sensors* aws, enum hwmon_sensor_types type, int channel)
 {
 	const struct board_sensor* board_sensors = known_boards[aws->board].sensors;
 	const u8 sensors_nr = known_boards[aws->board].sensor_count;
@@ -352,28 +372,30 @@ static u8 sensor_index (const struct asus_wmi_sensors* aws, enum hwmon_sensor_ty
 
 	for (i = 0; i < sensors_nr; ++i) {
 		if (known_sensors[board_sensors[i].index].type == type) {
-			if (channel == 0) return i;
+			if (channel == 0) {
+                                return i;
+                        }
 			--channel;
 		}
 	}
 	return 0xFF;
 }
 
-static int get_cached_value_or_update(const struct asus_wmi_sensor_info *sensor, struct asus_wmi_sensors *asus_wmi_sensors, u32 *value) {
+static int get_cached_value_or_update(int sensor_index, struct asus_wmi_sensors *aws, u32 *value) {
 	int ret;
-	sensor_source_t src = known_sensors[known_boards[asus_wmi_sensors->board].sensors[sensor->inboard_index].index].source;
-	if (time_after(jiffies, asus_wmi_sensors->source_last_updated[src] + HZ)) {
-		ret = update_source(src, asus_wmi_sensors);
+	sensor_source_t src = known_sensors[known_boards[aws->board].sensors[sensor_index].index].source;
+	if (time_after(jiffies, aws->source_last_updated[src] + HZ)) {
+		ret = update_source(src, aws);
 
 		if (ret) {
 			pr_err("update_source failure\n");
 			return -EIO;
 		}
 
-		asus_wmi_sensors->source_last_updated[src] = jiffies;
+		aws->source_last_updated[src] = jiffies;
 	}
 
-	*value = sensor->cached_value;
+	*value = aws->sensors[sensor_index].cached_value;
 	return 0;
 }
 
@@ -386,21 +408,18 @@ static int asus_wmi_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 {
 	int ret;
 	u32 value = 0;
-	const struct asus_wmi_sensor_info *sensor;
 
 	struct asus_wmi_sensors* aws = dev_get_drvdata(dev);
-
-	sensor = &aws->sensors[sensor_index(aws, type, channel)];
+        u8 sidx = find_sensor_index(aws, type, channel);
 
 	mutex_lock(&aws->lock);
 
-	ret = get_cached_value_or_update(sensor, aws, &value);
+	ret = get_cached_value_or_update(sidx, aws, &value);
 	mutex_unlock(&aws->lock);
 
 	if (!ret) {
 		*val = scale_sensor_value(value,
-			known_sensors[known_boards[aws->board]
-			    .sensors[sensor->inboard_index].index].type);
+			known_sensors[known_boards[aws->board].sensors[sidx].index].type);
 	}
 
 	return ret;
@@ -411,8 +430,8 @@ asus_wmi_hwmon_read_string(struct device *dev, enum hwmon_sensor_types type,
 		       u32 attr, int channel, const char **str)
 {
 	struct asus_wmi_sensors *aws = dev_get_drvdata(dev);
-	const struct asus_wmi_sensor_info *sensor = &aws->sensors[sensor_index(aws, type, channel)];
-	*str = known_boards[aws->board].sensors[sensor->inboard_index].name;
+        u8 sensor_index = find_sensor_index(aws, type, channel);
+	*str = known_boards[aws->board].sensors[sensor_index].name;
 
 	return 0;
 }
@@ -422,7 +441,7 @@ asus_wmi_hwmon_is_visible(const void *drvdata, enum hwmon_sensor_types type,
 		      u32 attr, int channel)
 {
 	const struct asus_wmi_sensors *aws = drvdata;
-	return sensor_index(aws, type, channel) != 0xFF ? S_IRUGO : 0;
+	return find_sensor_index(aws, type, channel) != 0xFF ? S_IRUGO : 0;
 }
 
 static int asus_wmi_hwmon_add_chan_info(struct hwmon_channel_info *asus_wmi_hwmon_chan,
@@ -533,9 +552,11 @@ static int configure_sensor_setup(struct asus_wmi_sensors *asus_wmi_sensors)
 		++asus_wmi_sensors->ec.nr_sensors;
 		for (k = 0; k < si->size; ++k) {
 			asus_wmi_sensors->ec.registers[asus_wmi_sensors->ec.nr_registers] = si->addr + k;
-			++asus_wmi_sensors->ec.nr_registers;
+        		++asus_wmi_sensors->ec.nr_registers;
 		}
 	}
+
+	pr_info("ASUS WMI board has %d EC sensors that span %d registers", asus_wmi_sensors->ec.nr_sensors, asus_wmi_sensors->ec.nr_registers);
 
 	hwdev = devm_hwmon_device_register_with_info(dev, "asuswmisensorsamd500",
 						     asus_wmi_sensors, chip_info,
@@ -553,19 +574,19 @@ static int is_board_supported(void) {
 	bios_version = dmi_get_system_info(DMI_BIOS_VERSION);
 
 	if(get_version(&version)) {
-		pr_err("asuswmisensorsamd500: Error getting version\n");
+		pr_err("Error getting version\n");
 		return -ENODEV;
 	}
 
 	if (board_vendor && board_name && bios_version) {
-		pr_info("asuswmisensorsamd500: Vendor: %s Board: %s BIOS version: %s WMI version: %u", board_vendor, board_name, bios_version, version);
+		pr_info("Vendor: %s Board: %s BIOS version: %s WMI version: %u", board_vendor, board_name, bios_version, version);
 
 		if (known_board_index(board_name) >= 0) {
-			pr_info("asuswmisensorsamd500: Supported board");
+			pr_info("Supported board");
 			return 0;
 		}
 	}
-	pr_info("asuswmisensorsamd500: Unsupported board");
+	pr_info("Unsupported board");
 	return -ENODEV;
 }
 
@@ -624,7 +645,7 @@ static struct platform_device *asus_wmi_sensors_platform_device;
 static int asus_wmi_probe(struct platform_device *pdev)
 {
 	if (!wmi_has_guid(ASUSWMI_MGMT2_GUID)) {
-		pr_info("asuswmisensors: ASUSHW GUID not found\n");
+		pr_info("ASUSHW GUID not found\n");
 		return -ENODEV;
 	}
 
@@ -632,7 +653,7 @@ static int asus_wmi_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	pr_info("asuswmisensorsamd500: AMD 500 ASUS WMI sensors driver loaded\n");
+	pr_info("driver loaded\n");
 	return 0;
 }
 

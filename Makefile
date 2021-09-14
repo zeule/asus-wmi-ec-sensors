@@ -40,7 +40,7 @@ endif
 
 # DKMS
 DKMS_ROOT_PATH=/usr/src/$(DRIVER)-$(DRIVER_VERSION)
-MODPROBE_OUTPUT=$(shell lsmod | grep asus-wmi-sensors)
+MODPROBE_OUTPUT=$(shell lsmod | grep asus-wmi-sensors-amd-500)
 
 # Directory below /lib/modules/$(TARGET)/kernel into which to install
 # the module:
@@ -94,7 +94,7 @@ dkms:
 	@cp dkms.conf $(DKMS_ROOT_PATH)
 	@cp VERSION $(DKMS_ROOT_PATH)
 	@cp Makefile $(DKMS_ROOT_PATH)
-	@cp asus-wmi-sensors.c $(DKMS_ROOT_PATH)
+	@cp asus-wmi-sensors-amd-500.c $(DKMS_ROOT_PATH)
 	@dkms add -m $(DRIVER) -v $(DRIVER_VERSION)
 	@dkms build -m $(DRIVER) -v $(DRIVER_VERSION)
 	@dkms install --force -m $(DRIVER) -v $(DRIVER_VERSION)
@@ -104,6 +104,6 @@ dkms_clean:
 	@if [ ! -z "$(MODPROBE_OUTPUT)" ]; then \
 		rmmod $(DRIVER);\
 	fi
-	@dkms remove -m $(DRIVER) -v $(DRIVER_VERSION) --all
-	@rm -rf $(DKMS_ROOT_PATH)
-	@rm -- VERSION dkms.conf
+	-@dkms remove -m $(DRIVER) -v $(DRIVER_VERSION) --all
+	-@rm -rf $(DKMS_ROOT_PATH)
+	-@rm -- VERSION dkms.conf
