@@ -27,7 +27,7 @@ else
 SYSTEM_MAP	:= /proc/kallsyms
 endif
 
-DRIVER := asus-wmi-sensors-amd-500
+DRIVER := asus-wmi-ec-sensors
 ifneq ("","$(wildcard .git/*)")
 DRIVER_VERSION := $(shell git describe --long --always)
 else
@@ -40,7 +40,7 @@ endif
 
 # DKMS
 DKMS_ROOT_PATH=/usr/src/$(DRIVER)-$(DRIVER_VERSION)
-MODPROBE_OUTPUT=$(shell lsmod | grep asus-wmi-sensors-amd-500)
+MODPROBE_OUTPUT=$(shell lsmod | grep asus-wmi-ec-sensors)
 
 # Directory below /lib/modules/$(TARGET)/kernel into which to install
 # the module:
@@ -65,10 +65,10 @@ all: modules
 
 # Targets for running make directly in the external module directory:
 # Add -g -DDEBUG to build a debug module
-AMD_500_ASUS_WMI_SENSORS_CFLAGS=-DAMD_500_ASUS_WMI_SENSORS_DRIVER_VERSION='\"$(DRIVER_VERSION)\"'
+ASUS_WMI_EC_SENSORS_CFLAGS=-DASUS_WMI_EC_SENSORS_DRIVER_VERSION='\"$(DRIVER_VERSION)\"'
 
 modules:
-	@$(MAKE) EXTRA_CFLAGS="$(AMD_500_ASUS_WMI_SENSORS_CFLAGS)" -C $(KERNEL_BUILD) M=$(CURDIR) $@
+	@$(MAKE) EXTRA_CFLAGS="$(ASUS_WMI_EC_SENSORS_CFLAGS)" -C $(KERNEL_BUILD) M=$(CURDIR) $@
 
 clean:
 	@$(MAKE) -C $(KERNEL_BUILD) M=$(CURDIR) $@
@@ -94,7 +94,7 @@ dkms:
 	@cp dkms.conf $(DKMS_ROOT_PATH)
 	@cp VERSION $(DKMS_ROOT_PATH)
 	@cp Makefile $(DKMS_ROOT_PATH)
-	@cp asus-wmi-sensors-amd-500.c $(DKMS_ROOT_PATH)
+	@cp asus-wmi-ec-sensors.c $(DKMS_ROOT_PATH)
 	@dkms add -m $(DRIVER) -v $(DRIVER_VERSION)
 	@dkms build -m $(DRIVER) -v $(DRIVER_VERSION)
 	@dkms install --force -m $(DRIVER) -v $(DRIVER_VERSION)

@@ -29,7 +29,8 @@ MODULE_VERSION("1");
 #define METHODID_BLOCK_READ_EC 0x42524543 /* BREC */
 
 #define ASUS_WMI_BLOCK_READ_REGISTERS_MAX 0x10 /* from the ASUS DSDT source */
-#define ASUS_WMI_MAX_BUF_LEN 0x80 /* from the ASUS_WMI_BLOCK_READ_REGISTERS_MAX value */
+/* from the ASUS_WMI_BLOCK_READ_REGISTERS_MAX value */
+#define ASUS_WMI_MAX_BUF_LEN 0x80
 #define MAX_SENSOR_LABEL_LENGTH 0x10
 
 #define ASUS_EC_SENSORS_MAX 11
@@ -187,7 +188,6 @@ static int get_version(u32 *version)
 	return 0;
 }
 
-
 /*
  * The next four functions converts to/from BRxx string argument format
  * The format of the string is as follows:
@@ -271,7 +271,8 @@ static void make_asus_wmi_block_read_query(struct ec_info *ec)
 	}
 
 	for (i = 0; i < ec->nr_sensors; ++i) {
-		for (j = 0; j < ec->sensors[i].addr.addr.size; ++j, ++register_idx) {
+		for (j = 0; j < ec->sensors[i].addr.addr.size;
+		     ++j, ++register_idx) {
 			registers[register_idx] =
 				(ec->sensors[i].addr.addr.bank << 8) +
 				ec->sensors[i].addr.addr.index + j;
@@ -281,7 +282,7 @@ static void make_asus_wmi_block_read_query(struct ec_info *ec)
 	registres_to_query(registers, ec->nr_registers, ec->read_arg);
 }
 
-static int asus_ec_block_read(u32 method_id, const char* query, u8* out)
+static int asus_ec_block_read(u32 method_id, const char *query, u8 *out)
 {
 	struct acpi_buffer input;
 	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER,
@@ -291,7 +292,7 @@ static int asus_ec_block_read(u32 method_id, const char* query, u8* out)
 
 	/* the first byte of the BRxx() argument string has to be the string size */
 	input.length = (acpi_size)query[0] + 1;
-	input.pointer = (void*)query;
+	input.pointer = (void *)query;
 	status = wmi_evaluate_method(ASUSWMI_MGMT2_GUID, 0, method_id, &input,
 				     &output);
 	if (ACPI_FAILURE(status)) {
@@ -318,8 +319,8 @@ static int update_ec_sensors(struct ec_info *ec)
 	u8 i_sensor, read_reg_ct, i_sensor_register;
 
 	make_asus_wmi_block_read_query(ec);
-	status =
-		asus_ec_block_read(METHODID_BLOCK_READ_EC, ec->read_arg, ec->read_buffer);
+	status = asus_ec_block_read(METHODID_BLOCK_READ_EC, ec->read_arg,
+				    ec->read_buffer);
 	if (status)
 		return status;
 
@@ -351,7 +352,7 @@ static int scale_sensor_value(u32 value, int data_type)
 }
 
 static u8 find_ec_sensor_index(const struct ec_info *ec,
-			    enum hwmon_sensor_types type, int channel)
+			       enum hwmon_sensor_types type, int channel)
 {
 	u8 i;
 
@@ -426,7 +427,9 @@ static umode_t asus_wmi_hwmon_is_visible(const void *drvdata,
 					 int channel)
 {
 	const struct asus_ec_sensors *state = drvdata;
-	return find_ec_sensor_index(&state->ec, type, channel) != 0xFF ? S_IRUGO : 0;
+	return find_ec_sensor_index(&state->ec, type, channel) != 0xFF ?
+			     S_IRUGO :
+			     0;
 }
 
 static int
@@ -644,8 +647,7 @@ static int __init asus_wmi_ec_init(void)
 	if (IS_ERR(asus_wmi_sensors_platform_device))
 		return PTR_ERR(asus_wmi_sensors_platform_device);
 
-	state =
-		devm_kzalloc(&asus_wmi_sensors_platform_device->dev,
+	state = devm_kzalloc(&asus_wmi_sensors_platform_device->dev,
 			     sizeof(struct asus_ec_sensors), GFP_KERNEL);
 
 	if (!state)
