@@ -34,16 +34,16 @@ MODULE_VERSION("1");
 #define MAX_SENSOR_LABEL_LENGTH 0x10
 
 #define ASUS_EC_SENSORS_MAX 11
-#define ASUS_EC_KNOWN_EC_REGISTERS 12
+#define ASUS_EC_KNOWN_EC_REGISTERS 14
 #define ASUS_EC_KNOWN_BOARDS 3
 
 typedef union {
 	u32 value;
 	struct {
-		u8 dummy;
-		u8 size;
-		u8 bank;
 		u8 index;
+		u8 bank;
+		u8 size;
+		u8 dummy;
 	} addr;
 } sensor_address;
 
@@ -118,7 +118,7 @@ static inline void set_sensor_info(struct sensor_info *sensor_info,
 	sensor_info->type = type;
 	strcpy(sensor_info->label, label);
 	sensor_info->cached_value = 0;
-	sensor_info->addr = addr;
+	sensor_info->addr.value = addr.value;
 	*nr_regs += sensor_info->addr.addr.size;
 }
 
@@ -253,7 +253,7 @@ static void registres_to_query(u16 *registers, u8 len, char *out)
 		*out++ = '0';
 		*out++ = htoa((registers[i] & 0x00F0) >> 4);
 		*out++ = '0';
-		*out++ = htoa((registers[i] & 0x00F0));
+		*out++ = htoa((registers[i] & 0x000F));
 		*out++ = '0';
 	}
 }
@@ -291,7 +291,7 @@ static int asus_ec_block_read(u32 method_id, const char *query, u8 *out)
 	union acpi_object *obj;
 
 	/* the first byte of the BRxx() argument string has to be the string size */
-	input.length = (acpi_size)query[0] + 1;
+	input.length = (acpi_size)query[0] + 2;
 	input.pointer = (void *)query;
 	status = wmi_evaluate_method(ASUSWMI_MGMT2_GUID, 0, method_id, &input,
 				     &output);
