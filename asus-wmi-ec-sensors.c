@@ -35,7 +35,6 @@ MODULE_VERSION("1");
 
 #define ASUS_EC_SENSORS_MAX 11
 #define ASUS_EC_KNOWN_EC_REGISTERS 14
-#define ASUS_EC_KNOWN_BOARDS 3
 
 typedef union {
 	u32 value;
@@ -191,70 +190,44 @@ static int get_version(u32 *version)
 /*
  * The next four functions converts to/from BRxx string argument format
  * The format of the string is as follows:
- * The string consists of two-byte characters
+ * The string consists of two-byte UTF-16 characters
  * The value of the very first byte int the string is equal to the total length
- * of the string in bytes, excluding the first two-byte character
+ * of the next string in bytes, thus excluding the first two-byte character
  * The rest of the string encodes pairs of (bank, index) pairs, where both
  * values are byte-long (0x00 to 0xFF)
- * For each byte its string representation is two bytes whose ASCII-coded values
- * are summed up, e.g. '1','9' sums up to 10.
- * Only '0'-'9', 'A'-'F', and 'a'-'f' ranges are allowed. ASUS ACPI code itself puts
- * '0' in the second byte, so 10 in the previous example would be encoded as 'A', '0'
+ * Numbers are encoded as UTF-16 hex values
 */
 
-static u8 atoh(char val)
+static inline char *hex_utf_16_le_pack(char *buf, u8 byte)
 {
-	if ((val >= 0x61) && (val <= 0x66)) {
-		return val - 0x57;
-	}
-	if ((val >= 0x41) && (val <= 0x46)) {
-		return val - 0x37;
-	}
-	if ((val >= 0x30) && (val <= 0x39)) {
-		return val - 0x30;
-	}
-	return 0xFF;
+	*buf++ = hex_asc_hi(byte);
+	*buf++ = 0;
+	*buf++ = hex_asc_lo(byte);
+	*buf++ = 0;
+	return buf;
 }
 
-static char htoa(u8 val)
-{
-	if (val <= 0x09) {
-		return val + 0x30;
-	}
-	if ((val >= 0x0A) && (val <= 0x0F)) {
-		return val - 0x0A + 0x41;
-	}
-
-	return 0xFF;
-}
-
-static void stoi(const u8 *inp, u8 *out)
+static void asus_wmi_decode_reply_buffer(const u8 *inp, u8 *out)
 {
 	u8 len = ACPI_MIN(ASUS_WMI_MAX_BUF_LEN, inp[0] / 4);
 	const u8 *data = inp + 2;
 	u8 i;
 
 	for (i = 0; i < len; ++i, data += 4) {
-		out[i] = (atoh(data[0]) << 4) + atoh(data[2]);
+		out[i] = (hex_to_bin(data[0]) << 4) + hex_to_bin(data[2]);
 	}
 }
 
-static void registres_to_query(u16 *registers, u8 len, char *out)
+static void asus_wmi_encode_registers(u16 *registers, u8 len, char *out)
 {
 	u8 i;
 
 	// assert(len <= 30)
 	*out++ = len * 8;
-	*out++ = '0';
+	*out++ = 0;
 	for (i = 0; i < len; ++i) {
-		*out++ = htoa((registers[i] & 0xF000) >> 12);
-		*out++ = '0';
-		*out++ = htoa((registers[i] & 0x0F00) >> 8);
-		*out++ = '0';
-		*out++ = htoa((registers[i] & 0x00F0) >> 4);
-		*out++ = '0';
-		*out++ = htoa((registers[i] & 0x000F));
-		*out++ = '0';
+		out = hex_utf_16_le_pack(out, (registers[i] & 0xFF00) >> 8);
+		out = hex_utf_16_le_pack(out, (registers[i] & 0x00FF));
 	}
 }
 
@@ -279,7 +252,7 @@ static void make_asus_wmi_block_read_query(struct ec_info *ec)
 		}
 	}
 
-	registres_to_query(registers, ec->nr_registers, ec->read_arg);
+	asus_wmi_encode_registers(registers, ec->nr_registers, ec->read_arg);
 }
 
 static int asus_ec_block_read(u32 method_id, const char *query, u8 *out)
@@ -306,7 +279,7 @@ static int asus_ec_block_read(u32 method_id, const char *query, u8 *out)
 		acpi_os_free(output.pointer);
 		return -EIO;
 	}
-	stoi(obj->buffer.pointer, out);
+	asus_wmi_decode_reply_buffer(obj->buffer.pointer, out);
 	acpi_os_free(output.pointer);
 	return 0;
 }
