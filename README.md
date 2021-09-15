@@ -1,13 +1,14 @@
 # asus-wmi-ec-sensors
 
 Linux HWMON sensors driver for ASUS motherboards to read sensors from the embedded controller
-​
+
 Many ASUS motherboards do not publish all the available sensors via the Super I/O chip but the 
 missing ones are available through the embedded controller (EC) registers.
 
 This driver implements reading those sensor data via the WMI method, which is known to be present
-in all ASUS motherboards based on the AMD 500 series chipsets. The driver needs to know exact 
-register addresses for the sensors and thus support for each motherboard has to be added explicitly.
+in all ASUS motherboards based on the AMD 500 series chipsets (and probably is available in other
+models too). The driver needs to know exact register addresses for the sensors and thus support 
+for each motherboard has to be added explicitly.
 
 The EC registers do not provide critical values for the sensors and as such they are not published to 
 the HWMON.
@@ -32,9 +33,9 @@ the board name in `/sys/class/dmi/id/board_name` or using `dmidecode` and increa
 `ASUS_EC_SENSORS_MAX` modify that too. If the available sensors span more than `ASUS_EC_KNOWN_EC_REGISTERS`
 byte registers, increase that value too.
 
-For each sensor you need to provide its size in registers (for example, RPM counters span two registers), 
+For each sensor you need to provide its size in bytes (for example, RPM counters span two single-byte registers), 
 its bank index and register index within the bank. If the sensor spans two or more registers, provide the 
 first one (the smaller number).
 
-Recompile and it should work.
+Compile and it should work.
 
