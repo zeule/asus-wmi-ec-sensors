@@ -57,6 +57,7 @@ typedef u8 board_t;
 enum board {
 	BOARD_R_C8H, // ROG Crosshair VIII Hero
 	BOARD_R_C8DH, // ROG Crosshair VIII Dark Hero
+	BOARD_R_C8F, // ROG Crosshair VIII Formula
 	BOARD_RS_X570_E_G // ROG STRIX X570-E GAMING
 };
 
@@ -64,6 +65,7 @@ enum board {
 static const char *const boards_names[] = {
 	"ROG CROSSHAIR VIII HERO",
 	"ROG CROSSHAIR VIII DARK HERO",
+	"ROG CROSSHAIR VIII FORMULA",
 	"ROG STRIX X570-E GAMING",
 };
 
@@ -132,6 +134,7 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 	case BOARD_RS_X570_E_G:
 	case BOARD_R_C8H:
 	case BOARD_R_C8DH:
+	case BOARD_R_C8F:
 		set_sensor_info(si++, "Chipset", hwmon_temp,
 				make_sensor_address(1, 0x00, 0x3A),
 				&ec->nr_registers);
@@ -158,6 +161,7 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 	switch (board) {
 	case BOARD_RS_X570_E_G:
 	case BOARD_R_C8H:
+	case BOARD_R_C8F:
 		set_sensor_info(si++, "Chipset", hwmon_fan,
 				make_sensor_address(2, 0x00, 0xB4),
 				&ec->nr_registers);
@@ -166,6 +170,7 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 	switch (board) {
 	case BOARD_R_C8H:
 	case BOARD_R_C8DH:
+	case BOARD_R_C8F:
 		set_sensor_info(si++, "Water", hwmon_fan,
 				make_sensor_address(2, 0x00, 0xBC),
 				&ec->nr_registers);
@@ -235,7 +240,7 @@ static void make_asus_wmi_block_read_query(struct ec_info *ec)
 {
 	u16 registers[ASUS_EC_KNOWN_EC_REGISTERS];
 	u8 i, j, register_idx = 0;
-	/* if we can get values for all the registres in a single query,
+	/* if we can get values for all the registers in a single query,
 	 * the query will not change from call to call */
 	if (ec->nr_registers <= ASUS_WMI_BLOCK_READ_REGISTERS_MAX &&
 	    ec->read_arg[0] > 0) {
