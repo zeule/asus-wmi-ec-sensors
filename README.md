@@ -24,10 +24,10 @@ the HWMON.
 
 First, you need to find out which EC registers to read (although) they are pretty typical. If you have 
 no idea is there any, you can try the [hwinfo](https://www.hwinfo.com/) software under Windows that will
-show the EC node and known sensors for it. When you found the data (or decided to probe the default set),
+show the EC node and known sensors for it. When you have the data (or decided to probe the default set),
 the following changes to the source code need to be made:
 
-1. Add your board name to the `boards_names` array and a new enum value to the `board` enum. You can find
+1. Add your board name to the `asus_wmi_ec_dmi_table` array and a new enum value to the `board` enum. You can find
 the board name in `/sys/class/dmi/id/board_name` or using `dmidecode`.
 
 2. Modify the `fill_board_sensors()` function to handle your board. If your board has more sensors than 

@@ -6,7 +6,6 @@
  * Copyright (C) 2021 Eugene Shalygin <eugene.shalygin@gmail.com>
  * Heavily based on the asus-wmi-sensors code by Ed Brindley
  */
-#define PLATFORM_DRIVER
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/dmi.h>
@@ -61,12 +60,20 @@ enum board {
 	BOARD_RS_X570_E_G // ROG STRIX X570-E GAMING
 };
 
-// keep in the same order as the board enum
-static const char *const boards_names[] = {
-	"ROG CROSSHAIR VIII HERO",
-	"ROG CROSSHAIR VIII DARK HERO",
-	"ROG CROSSHAIR VIII FORMULA",
-	"ROG STRIX X570-E GAMING",
+#define DMI_EXACT_MATCH_ASUS_BOARD_NAME(name) \
+	{ .matches = { \
+		DMI_EXACT_MATCH(DMI_BOARD_VENDOR, "ASUSTeK COMPUTER INC."), \
+		DMI_EXACT_MATCH(DMI_BOARD_NAME, name), \
+	}}
+/*
+ * keep in the same order as the board enum
+ */
+static struct dmi_system_id asus_wmi_ec_dmi_table[] __initdata = {
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII HERO"),
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII DARK HERO"),
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII FORMULA"),
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX X570-E GAMING"),
+	{}
 };
 
 static u32 hwmon_attributes[] = {
@@ -96,13 +103,8 @@ struct ec_info {
 };
 
 struct asus_ec_sensors {
-#ifdef PLATFORM_DRIVER
 	struct platform_driver platform_driver;
 	struct platform_device *platform_device;
-#else
-	struct wmi_driver wmi_driver;
-	struct wmi_device *wmi_device;
-#endif
 
 	struct mutex lock;
 	struct ec_info ec;
@@ -440,33 +442,45 @@ static struct hwmon_chip_info asus_wmi_chip_info = {
 	.info = NULL,
 };
 
-static int known_board_index(const char *name)
+static int __init supported_board_index(void)
 {
-	int r = match_string(boards_names, ARRAY_SIZE(boards_names), name);
-	return r != -EINVAL ? r : -1;
+	const struct dmi_system_id* dmi_entry;
+	u32 version = 0;
+
+	dmi_entry = dmi_first_match(asus_wmi_ec_dmi_table);
+	if (!dmi_entry) {
+		pr_info("Unsupported board");
+		return -ENODEV;
+	}
+
+	if (get_version(&version)) {
+		pr_err("Error getting version\n");
+		return -ENODEV;
+	}
+
+	return dmi_entry - asus_wmi_ec_dmi_table;
 }
 
-static int configure_sensor_setup(struct asus_ec_sensors *asus_ec_sensors)
+static int __init configure_sensor_setup(struct asus_ec_sensors *asus_ec_sensors)
 {
 	int i;
 	int nr_count[hwmon_max] = { 0 }, nr_types = 0;
 	struct device *hwdev;
-#ifdef PLATFORM_DRIVER
 	struct device *dev = &asus_ec_sensors->platform_device->dev;
-#else
-	struct device *dev = &asus_ec_sensors->wmi_device->dev;
-#endif
 	struct hwmon_channel_info *asus_wmi_hwmon_chan;
 	const struct hwmon_channel_info **ptr_asus_wmi_ci;
 	const struct hwmon_chip_info *chip_info;
 	const struct sensor_info *si;
 	enum hwmon_sensor_types type;
 
+	asus_ec_sensors->board = supported_board_index();
+	if (asus_ec_sensors->board < 0) {
+		return -ENODEV;
+	}
+
 	asus_ec_sensors->buffer = -1;
 	mutex_init(&asus_ec_sensors->lock);
 
-	asus_ec_sensors->board =
-		known_board_index(dmi_get_system_info(DMI_BOARD_NAME));
 	fill_board_sensors(&asus_ec_sensors->ec, asus_ec_sensors->board);
 
 	for (i = 0; i < asus_ec_sensors->ec.nr_sensors; ++i) {
@@ -507,99 +521,23 @@ static int configure_sensor_setup(struct asus_ec_sensors *asus_ec_sensors)
 		asus_ec_sensors->ec.nr_registers);
 
 	hwdev = devm_hwmon_device_register_with_info(
-		dev, "asuswmisensorsamd500", asus_ec_sensors, chip_info, NULL);
+		dev, "asus-wmi-ec-sensors", asus_ec_sensors, chip_info, NULL);
 
 	return PTR_ERR_OR_ZERO(hwdev);
 }
 
-static int is_board_supported(void)
-{
-	const char *board_vendor, *board_name, *bios_version;
-	u32 version = 0;
-
-	board_vendor = dmi_get_system_info(DMI_BOARD_VENDOR);
-	board_name = dmi_get_system_info(DMI_BOARD_NAME);
-	bios_version = dmi_get_system_info(DMI_BIOS_VERSION);
-
-	if (get_version(&version)) {
-		pr_err("Error getting version\n");
-		return -ENODEV;
-	}
-
-	if (board_vendor && board_name && bios_version) {
-		pr_info("Vendor: %s Board: %s BIOS version: %s WMI version: %u",
-			board_vendor, board_name, bios_version, version);
-
-		if (known_board_index(board_name) >= 0) {
-			pr_info("Supported board");
-			return 0;
-		}
-	}
-	pr_info("Unsupported board");
-	return -ENODEV;
-}
-
-#ifndef PLATFORM_DRIVER
-
-static int asus_wmi_sensors_probe(struct wmi_device *wdev)
-{
-	struct device *dev = &wdev->dev;
-	struct asus_ec_sensors *asus_ec_sensors;
-
-	pr_info("WMI GUID matched - probing");
-
-	if (is_board_supported()) {
-		return -ENODEV;
-	}
-
-	asus_ec_sensors =
-		devm_kzalloc(dev, sizeof(struct asus_ec_sensors), GFP_KERNEL);
-	if (!asus_ec_sensors)
-		return -ENOMEM;
-
-	asus_ec_sensors->wmi_device = wdev;
-
-	dev_set_drvdata(dev, asus_ec_sensors);
-	return configure_sensor_setup(asus_ec_sensors);
-}
-
-static int asus_ec_sensors_remove(struct wmi_device *wdev)
-{
-	struct asus_ec_sensors *asus;
-
-	asus = dev_get_drvdata(&wdev->dev);
-
-	return 0;
-}
-
-static const struct wmi_device_id asus_ec_sensors_id_table[] = {
-	{ .guid_string = ASUS_HW_GUID },
-	{},
-};
-
-static struct wmi_driver asus_wmi_sensors = {
-	.driver = {
-		.name = "asus-wmi-ec-sensors",
-	},
-	.probe = asus_wmi_sensors_probe,
-	.remove = asus_wmi_sensors_remove,
-	.id_table = asus_wmi_sensors_id_table,
-};
-
-module_wmi_driver(asus_wmi_sensors);
-#endif
-
-#ifdef PLATFORM_DRIVER
 static struct platform_device *asus_wmi_sensors_platform_device;
 
 static int asus_wmi_probe(struct platform_device *pdev)
 {
-	if (!wmi_has_guid(ASUSWMI_MGMT2_GUID)) {
-		pr_info("ASUSHW GUID not found\n");
+	struct asus_ec_sensors* state = platform_get_drvdata(pdev);
+
+	if (state->board < 0) {
 		return -ENODEV;
 	}
 
-	if (is_board_supported()) {
+	if (!wmi_has_guid(ASUSWMI_MGMT2_GUID)) {
+		pr_info("ASUSHW GUID not found\n");
 		return -ENODEV;
 	}
 
@@ -613,6 +551,8 @@ static struct platform_driver asus_wmi_sensors_platform_driver = {
 	},
 	.probe		= asus_wmi_probe
 };
+
+MODULE_DEVICE_TABLE(dmi, asus_wmi_ec_dmi_table);
 
 static int __init asus_wmi_ec_init(void)
 {
@@ -647,6 +587,5 @@ static void __exit asus_wmi_ec_exit(void)
 
 module_init(asus_wmi_ec_init);
 module_exit(asus_wmi_ec_exit);
-#endif
 
 // kate: tab-width 8; indent-width 8;
