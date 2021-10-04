@@ -19,21 +19,12 @@
 #include <linux/platform_device.h>
 #include <linux/wmi.h>
 
-MODULE_AUTHOR("Eugene Shalygin <eugene.shalygin@gmail.com>");
-MODULE_DESCRIPTION("HWMON driver for sensors accessible via EC in ASUS motherboards");
-MODULE_LICENSE("GPL");
-MODULE_VERSION("1");
-
 #define ASUSWMI_MGMT2_GUID "466747A0-70EC-11DE-8A39-0800200C9A66"
 #define METHODID_BLOCK_READ_EC 0x42524543 /* BREC */
 
 #define ASUS_WMI_BLOCK_READ_REGISTERS_MAX 0x10 /* from the ASUS DSDT source */
-/* from the ASUS_WMI_BLOCK_READ_REGISTERS_MAX value */
-#define ASUS_WMI_MAX_BUF_LEN 0x80
+#define ASUS_WMI_MAX_BUF_LEN 0x80 /* from the ASUS_WMI_BLOCK_READ_REGISTERS_MAX value */
 #define MAX_SENSOR_LABEL_LENGTH 0x10
-
-#define ASUS_EC_SENSORS_MAX 11
-#define ASUS_EC_KNOWN_EC_REGISTERS 14
 
 typedef union {
 	u32 value;
@@ -42,15 +33,11 @@ typedef union {
 		u8 bank;
 		u8 size;
 		u8 dummy;
-	} addr;
+	} components;
 } sensor_address;
 
-static inline sensor_address make_sensor_address(u8 size, u8 bank, u8 index)
-{
-	sensor_address res;
-	res.value = (size << 16) + (bank << 8) + index;
-	return res;
-}
+#define MAKE_SENSOR_ADDRESS(size, bank, index) \
+	{ .value = (size << 16) + (bank << 8) + index}
 
 typedef u8 board_t;
 enum board {
@@ -58,8 +45,9 @@ enum board {
 	BOARD_R_C8H, // ROG Crosshair VIII Hero
 	BOARD_R_C8DH, // ROG Crosshair VIII Dark Hero
 	BOARD_R_C8F, // ROG Crosshair VIII Formula
-	BOARD_RS_X570_E_G, // ROG STRIX X570-E GAMING
 	BOARD_RS_B550_E_G, // ROG STRIX B550-E GAMING
+	BOARD_RS_X570_E_G, // ROG STRIX X570-E GAMING
+	BOARD_MAX
 };
 
 #define DMI_EXACT_MATCH_ASUS_BOARD_NAME(name) \
@@ -75,8 +63,8 @@ static const struct dmi_system_id asus_wmi_ec_dmi_table[] __initdata = {
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII HERO"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII DARK HERO"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII FORMULA"),
-	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX X570-E GAMING"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX B550-E GAMING"),
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX X570-E GAMING"),
 	{}
 };
 
@@ -88,15 +76,103 @@ static u32 hwmon_attributes[] = {
 	[hwmon_fan] = HWMON_F_INPUT | HWMON_F_LABEL,
 };
 
-struct sensor_info {
+struct ec_sensor_info {
 	char label[MAX_SENSOR_LABEL_LENGTH];
 	enum hwmon_sensor_types type;
 	sensor_address addr;
+};
+
+#define EC_SENSOR(sensor_label, sensor_type, size, bank, index) \
+	{ .label = sensor_label,\
+	.type = sensor_type, \
+	.addr = MAKE_SENSOR_ADDRESS(size, bank, index) \
+	}
+
+enum known_ec_sensor {
+	SENSOR_TEMP_CHIPSET,
+	SENSOR_TEMP_CPU,
+	SENSOR_TEMP_MB,
+	SENSOR_TEMP_T_SENSOR,
+	SENSOR_TEMP_VRM,
+	SENSOR_FAN_CPU_OPT,
+	SENSOR_FAN_CHIPSET,
+	SENSOR_FAN_WATER_FLOW,
+	SENSOR_CURR_CPU,
+	SENSOR_TEMP_WATER_IN,
+	SENSOR_TEMP_WATER_OUT,
+	SENSOR_MAX
+};
+
+/*
+ * All the known sensors for ASUS EC controllers
+ */
+static const struct ec_sensor_info known_ec_sensors[] = {
+	[SENSOR_TEMP_CHIPSET] = EC_SENSOR("Chipset", hwmon_temp, 1, 0x00, 0x3a),
+	[SENSOR_TEMP_CPU] = EC_SENSOR("CPU", hwmon_temp, 1, 0x00, 0x3b),
+	[SENSOR_TEMP_MB] = EC_SENSOR("Motherboard", hwmon_temp, 1, 0x00, 0x3c),
+	[SENSOR_TEMP_T_SENSOR] = EC_SENSOR("T_Sensor", hwmon_temp, 1, 0x00, 0x3d),
+	[SENSOR_TEMP_VRM] = EC_SENSOR("VRM", hwmon_temp, 1, 0x00, 0x3e),
+	[SENSOR_FAN_CPU_OPT] = EC_SENSOR("CPU_Opt", hwmon_fan, 2, 0x00, 0xb0),
+	[SENSOR_FAN_CHIPSET] = EC_SENSOR("Chipset", hwmon_fan, 2, 0x00, 0xb4),
+	[SENSOR_FAN_WATER_FLOW] = EC_SENSOR("Water_Flow", hwmon_fan, 2, 0x00, 0xbc),
+	[SENSOR_CURR_CPU] = EC_SENSOR("CPU", hwmon_curr, 1, 0x00, 0xf4),
+	[SENSOR_TEMP_WATER_IN] = EC_SENSOR("Water_In", hwmon_temp, 1, 0x01, 0x00),
+	[SENSOR_TEMP_WATER_OUT] = EC_SENSOR("Water_Out", hwmon_temp, 1, 0x01, 0x01),
+};
+
+static const enum known_ec_sensor known_board_sensors[BOARD_MAX][SENSOR_MAX + 1] = {
+	[BOARD_PW_X570_A] = {
+		SENSOR_TEMP_CHIPSET, SENSOR_TEMP_CPU, SENSOR_TEMP_MB, SENSOR_TEMP_VRM,
+		SENSOR_FAN_CHIPSET,
+		SENSOR_CURR_CPU,
+		SENSOR_MAX
+	},
+	[BOARD_R_C8H] = {
+		SENSOR_TEMP_CHIPSET, SENSOR_TEMP_CPU, SENSOR_TEMP_MB,
+		SENSOR_TEMP_T_SENSOR, SENSOR_TEMP_VRM,
+		SENSOR_TEMP_WATER_IN, SENSOR_TEMP_WATER_OUT,
+		SENSOR_FAN_CPU_OPT, SENSOR_FAN_CHIPSET, SENSOR_FAN_WATER_FLOW,
+		SENSOR_CURR_CPU,
+		SENSOR_MAX
+	},
+	[BOARD_R_C8DH] = { /* Same as Hero but without chipset fan */
+		SENSOR_TEMP_CHIPSET, SENSOR_TEMP_CPU, SENSOR_TEMP_MB,
+		SENSOR_TEMP_T_SENSOR, SENSOR_TEMP_VRM,
+		SENSOR_TEMP_WATER_IN, SENSOR_TEMP_WATER_OUT,
+		SENSOR_FAN_CPU_OPT, SENSOR_FAN_WATER_FLOW,
+		SENSOR_CURR_CPU,
+		SENSOR_MAX
+	},
+	[BOARD_R_C8F] = { /* Same as Hero but without water */
+		SENSOR_TEMP_CHIPSET, SENSOR_TEMP_CPU, SENSOR_TEMP_MB,
+		SENSOR_TEMP_T_SENSOR, SENSOR_TEMP_VRM,
+		SENSOR_FAN_CPU_OPT, SENSOR_FAN_CHIPSET,
+		SENSOR_CURR_CPU,
+		SENSOR_MAX
+	},
+	[BOARD_RS_B550_E_G] = {
+		SENSOR_TEMP_CHIPSET, SENSOR_TEMP_CPU, SENSOR_TEMP_MB,
+		SENSOR_TEMP_T_SENSOR, SENSOR_TEMP_VRM,
+		SENSOR_FAN_CPU_OPT,
+		SENSOR_CURR_CPU,
+		SENSOR_MAX
+	},
+	[BOARD_RS_X570_E_G] = {
+		SENSOR_TEMP_CHIPSET, SENSOR_TEMP_CPU, SENSOR_TEMP_MB,
+		SENSOR_TEMP_T_SENSOR, SENSOR_TEMP_VRM,
+		SENSOR_FAN_CHIPSET,
+		SENSOR_CURR_CPU,
+		SENSOR_MAX
+	},
+};
+
+struct ec_sensor {
+	enum known_ec_sensor info_index;
 	u32 cached_value;
 };
 
 struct ec_sensors_data {
-	struct sensor_info sensors[ASUS_EC_SENSORS_MAX];
+	struct ec_sensor sensors[SENSOR_MAX];
 	/* UTF-16 string to pass to BRxx() WMI function */
 	char read_arg[((ASUS_WMI_BLOCK_READ_REGISTERS_MAX * 4) + 1) * 2];
 	u8 read_buffer[ASUS_WMI_BLOCK_READ_REGISTERS_MAX];
@@ -112,96 +188,20 @@ struct asus_ec_sensors {
 	board_t board;
 };
 
-static inline void set_sensor_info(struct sensor_info *sensor_info,
-				   const char *label,
-				   enum hwmon_sensor_types type,
-				   sensor_address addr, u8 *nr_regs)
+static void __init fill_board_sensors(struct ec_sensors_data *ec, board_t board)
 {
-	sensor_info->type = type;
-	strcpy(sensor_info->label, label);
-	sensor_info->cached_value = 0;
-	sensor_info->addr.value = addr.value;
-	*nr_regs += sensor_info->addr.addr.size;
-}
+	const enum known_ec_sensor* bsi = known_board_sensors[board];
+	struct ec_sensor *s = ec->sensors;
+	int i;
 
-static void fill_board_sensors(struct ec_sensors_data *ec, board_t board)
-{
-	struct sensor_info *si;
+	ec->nr_sensors = ec->nr_registers = 0;
+	for (i = 0; i < SENSOR_MAX && bsi[i] != SENSOR_MAX; i++) {
+		s[i].info_index = bsi[i];
+		s[i].cached_value = 0;
+		ec->nr_sensors++;
+		ec->nr_registers += known_ec_sensors[bsi[i]].addr.components.size;
 
-	si = ec->sensors;
-	ec->nr_registers = 0;
-
-	switch (board) {
-	case BOARD_PW_X570_A:
-	case BOARD_RS_B550_E_G:
-	case BOARD_RS_X570_E_G:
-	case BOARD_R_C8H:
-	case BOARD_R_C8DH:
-	case BOARD_R_C8F:
-		set_sensor_info(si++, "Chipset", hwmon_temp,
-				make_sensor_address(1, 0x00, 0x3A),
-				&ec->nr_registers);
-		set_sensor_info(si++, "CPU", hwmon_temp,
-				make_sensor_address(1, 0x00, 0x3B),
-				&ec->nr_registers);
-		set_sensor_info(si++, "Motherboard", hwmon_temp,
-				make_sensor_address(1, 0x00, 0x3C),
-				&ec->nr_registers);
-		set_sensor_info(si++, "VRM", hwmon_temp,
-				make_sensor_address(1, 0x00, 0x3E),
-				&ec->nr_registers);
 	}
-
-	switch (board) {
-	case BOARD_RS_B550_E_G:
-	case BOARD_RS_X570_E_G:
-	case BOARD_R_C8H:
-	case BOARD_R_C8DH:
-	case BOARD_R_C8F:
-		set_sensor_info(si++, "T_Sensor", hwmon_temp,
-				make_sensor_address(1, 0x00, 0x3D),
-				&ec->nr_registers);
-	}
-
-	switch (board) {
-	case BOARD_RS_X570_E_G:
-	case BOARD_R_C8H:
-	case BOARD_R_C8DH:
-	case BOARD_R_C8F:
-		set_sensor_info(si++, "CPU_Opt", hwmon_fan,
-				make_sensor_address(2, 0x00, 0xB0),
-				&ec->nr_registers);
-		set_sensor_info(si++, "CPU", hwmon_curr,
-				make_sensor_address(1, 0x00, 0xF4),
-				&ec->nr_registers);
-	}
-
-	switch (board) {
-	case BOARD_PW_X570_A:
-	case BOARD_RS_X570_E_G:
-	case BOARD_R_C8H:
-	case BOARD_R_C8F:
-		set_sensor_info(si++, "Chipset", hwmon_fan,
-				make_sensor_address(2, 0x00, 0xB4),
-				&ec->nr_registers);
-	}
-
-	switch (board) {
-	case BOARD_R_C8H:
-	case BOARD_R_C8DH:
-	case BOARD_R_C8F:
-		set_sensor_info(si++, "Water", hwmon_fan,
-				make_sensor_address(2, 0x00, 0xBC),
-				&ec->nr_registers);
-		set_sensor_info(si++, "Water_In", hwmon_temp,
-				make_sensor_address(1, 0x01, 0x00),
-				&ec->nr_registers);
-		set_sensor_info(si++, "Water_Out", hwmon_temp,
-				make_sensor_address(1, 0x01, 0x01),
-				&ec->nr_registers);
-	}
-
-	ec->nr_sensors = si - ec->sensors;
 }
 
 static int get_version(u32 *version)
@@ -256,8 +256,9 @@ static void asus_wmi_encode_registers(u16 *registers, u8 len, char *out)
 
 static void make_asus_wmi_block_read_query(struct ec_sensors_data *ec)
 {
-	u16 registers[ASUS_EC_KNOWN_EC_REGISTERS];
-	int i, j, register_idx = 0;
+	u16 registers[ASUS_WMI_BLOCK_READ_REGISTERS_MAX];
+	const struct ec_sensor_info* si;
+	unsigned i, j, register_idx = 0;
 	/* if we can get values for all the registers in a single query,
 	 * the query will not change from call to call */
 	if (ec->nr_registers <= ASUS_WMI_BLOCK_READ_REGISTERS_MAX &&
@@ -267,11 +268,12 @@ static void make_asus_wmi_block_read_query(struct ec_sensors_data *ec)
 	}
 
 	for (i = 0; i < ec->nr_sensors; ++i) {
-		for (j = 0; j < ec->sensors[i].addr.addr.size;
+		si = &known_ec_sensors[ec->sensors[i].info_index];
+		for (j = 0; j < si->addr.components.size;
 		     ++j, ++register_idx) {
 			registers[register_idx] =
-				(ec->sensors[i].addr.addr.bank << 8) +
-				ec->sensors[i].addr.addr.index + j;
+				(si->addr.components.bank << 8) +
+				si->addr.components.index + j;
 		}
 	}
 
@@ -309,7 +311,8 @@ static int asus_ec_block_read(const struct device* dev, u32 method_id, const cha
 
 static int update_ec_sensors(const struct device* dev, struct ec_sensors_data *ec)
 {
-	struct sensor_info *si;
+	const struct ec_sensor_info* si;
+	struct ec_sensor *s;
 	u32 value;
 	int status;
 	unsigned i_sensor, read_reg_ct, i_sensor_register;
@@ -323,15 +326,16 @@ static int update_ec_sensors(const struct device* dev, struct ec_sensors_data *e
 
 	read_reg_ct = 0;
 	for (i_sensor = 0; i_sensor < ec->nr_sensors; ++i_sensor) {
-		si = &ec->sensors[i_sensor];
+		s = &ec->sensors[i_sensor];
+		si = &known_ec_sensors[s->info_index];
 		value = ec->read_buffer[read_reg_ct++];
 		for (i_sensor_register = 1;
-		     i_sensor_register < si->addr.addr.size;
+		     i_sensor_register < si->addr.components.size;
 		     ++i_sensor_register) {
 			value <<= 8;
 			value += ec->read_buffer[read_reg_ct++];
 		}
-		si->cached_value = value;
+		s->cached_value = value;
 	}
 	return 0;
 }
@@ -348,20 +352,20 @@ static int scale_sensor_value(u32 value, int data_type)
 	}
 }
 
-static u8 find_ec_sensor_index(const struct ec_sensors_data *ec,
+static int find_ec_sensor_index(const struct ec_sensors_data *ec,
 			       enum hwmon_sensor_types type, int channel)
 {
-	u8 i;
+	unsigned i;
 
 	for (i = 0; i < ec->nr_sensors; ++i) {
-		if (ec->sensors[i].type == type) {
+		if (known_ec_sensors[ec->sensors[i].info_index].type == type) {
 			if (channel == 0) {
 				return i;
 			}
 			--channel;
 		}
 	}
-	return 0xFF;
+	return -EDOM;
 }
 
 static int get_cached_value_or_update(const struct device* dev, int sensor_index,
@@ -394,7 +398,10 @@ static int asus_wmi_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	u32 value = 0;
 
 	struct asus_ec_sensors *state = dev_get_drvdata(dev);
-	u8 sidx = find_ec_sensor_index(&state->sensors_data, type, channel);
+	int sidx = find_ec_sensor_index(&state->sensors_data, type, channel);
+	if (sidx < 0) {
+		return sidx;
+	}
 
 	mutex_lock(&state->lock);
 
@@ -402,7 +409,7 @@ static int asus_wmi_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	mutex_unlock(&state->lock);
 
 	if (!ret) {
-		*val = scale_sensor_value(value, state->sensors_data.sensors[sidx].type);
+		*val = scale_sensor_value(value, known_ec_sensors[state->sensors_data.sensors[sidx].info_index].type);
 	}
 
 	return ret;
@@ -413,8 +420,8 @@ static int asus_wmi_hwmon_read_string(struct device *dev,
 				      int channel, const char **str)
 {
 	struct asus_ec_sensors *state = dev_get_drvdata(dev);
-	u8 sensor_index = find_ec_sensor_index(&state->sensors_data, type, channel);
-	*str = state->sensors_data.sensors[sensor_index].label;
+	int sensor_index = find_ec_sensor_index(&state->sensors_data, type, channel);
+	*str = known_ec_sensors[state->sensors_data.sensors[sensor_index].info_index].label;
 
 	return 0;
 }
@@ -487,7 +494,7 @@ static int __init configure_sensor_setup(struct platform_device *pdev)
 	struct hwmon_channel_info *asus_wmi_hwmon_chan;
 	const struct hwmon_channel_info **ptr_asus_wmi_ci;
 	const struct hwmon_chip_info *chip_info;
-	const struct sensor_info *si;
+	const struct ec_sensor_info *si;
 	enum hwmon_sensor_types type;
 	unsigned i;
 
@@ -501,7 +508,7 @@ static int __init configure_sensor_setup(struct platform_device *pdev)
 	fill_board_sensors(&asus_ec_sensors->sensors_data, asus_ec_sensors->board);
 
 	for (i = 0; i < asus_ec_sensors->sensors_data.nr_sensors; ++i) {
-		si = &asus_ec_sensors->sensors_data.sensors[i];
+		si = &known_ec_sensors[asus_ec_sensors->sensors_data.sensors[i].info_index];
 		if (!nr_count[si->type])
 			++nr_types;
 		++nr_count[si->type];
@@ -600,5 +607,10 @@ static void __exit asus_wmi_ec_exit(void)
 
 module_init(asus_wmi_ec_init);
 module_exit(asus_wmi_ec_exit);
+
+MODULE_AUTHOR("Eugene Shalygin <eugene.shalygin@gmail.com>");
+MODULE_DESCRIPTION("HWMON driver for sensors accessible via EC in ASUS motherboards");
+MODULE_LICENSE("GPL");
+MODULE_VERSION("1");
 
 // kate: tab-width 8; indent-width 8;
