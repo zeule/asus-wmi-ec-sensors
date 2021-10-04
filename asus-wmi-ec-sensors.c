@@ -54,6 +54,7 @@ static inline sensor_address make_sensor_address(u8 size, u8 bank, u8 index)
 
 typedef u8 board_t;
 enum board {
+	BOARD_PW_X570_A, // Pro WS X570-ACE
 	BOARD_R_C8H, // ROG Crosshair VIII Hero
 	BOARD_R_C8DH, // ROG Crosshair VIII Dark Hero
 	BOARD_R_C8F, // ROG Crosshair VIII Formula
@@ -70,6 +71,7 @@ enum board {
  * keep in the same order as the board enum
  */
 static struct dmi_system_id asus_wmi_ec_dmi_table[] __initdata = {
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("Pro WS X570-ACE"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII HERO"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII DARK HERO"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII FORMULA"),
@@ -135,6 +137,7 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 	ec->nr_registers = 0;
 
 	switch (board) {
+	case BOARD_PW_X570_A:
 	case BOARD_RS_B550_E_G:
 	case BOARD_RS_X570_E_G:
 	case BOARD_R_C8H:
@@ -149,9 +152,6 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 		set_sensor_info(si++, "Motherboard", hwmon_temp,
 				make_sensor_address(1, 0x00, 0x3C),
 				&ec->nr_registers);
-		set_sensor_info(si++, "T_Sensor", hwmon_temp,
-				make_sensor_address(1, 0x00, 0x3D),
-				&ec->nr_registers);
 		set_sensor_info(si++, "VRM", hwmon_temp,
 				make_sensor_address(1, 0x00, 0x3E),
 				&ec->nr_registers);
@@ -160,6 +160,17 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 				&ec->nr_registers);
 		set_sensor_info(si++, "CPU", hwmon_curr,
 				make_sensor_address(1, 0x00, 0xF4),
+				&ec->nr_registers);
+	}
+
+	switch (board) {
+	case BOARD_RS_B550_E_G:
+	case BOARD_RS_X570_E_G:
+	case BOARD_R_C8H:
+	case BOARD_R_C8DH:
+	case BOARD_R_C8F:
+		set_sensor_info(si++, "T_Sensor", hwmon_temp,
+				make_sensor_address(1, 0x00, 0x3D),
 				&ec->nr_registers);
 	}
 
@@ -177,6 +188,7 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 	}
 
 	switch (board) {
+	case BOARD_PW_X570_A:
 	case BOARD_RS_X570_E_G:
 	case BOARD_R_C8H:
 	case BOARD_R_C8F:
