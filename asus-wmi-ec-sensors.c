@@ -6,8 +6,8 @@
  * Copyright (C) 2021 Eugene Shalygin <eugene.shalygin@gmail.com>
  * Heavily based on the asus-wmi-sensors code by Ed Brindley
  */
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/dev_printk.h>
 #include <linux/dmi.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
@@ -20,7 +20,7 @@
 #include <linux/wmi.h>
 
 MODULE_AUTHOR("Eugene Shalygin <eugene.shalygin@gmail.com>");
-MODULE_DESCRIPTION("Asus WMI Sensors Driver for AMD 500s chipsets");
+MODULE_DESCRIPTION("HWMON driver for sensors accessible via EC in ASUS motherboards");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1");
 
@@ -70,7 +70,7 @@ enum board {
 /*
  * keep in the same order as the board enum
  */
-static struct dmi_system_id asus_wmi_ec_dmi_table[] __initdata = {
+static const struct dmi_system_id asus_wmi_ec_dmi_table[] __initdata = {
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("Pro WS X570-ACE"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII HERO"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII DARK HERO"),
@@ -95,7 +95,7 @@ struct sensor_info {
 	u32 cached_value;
 };
 
-struct ec_info {
+struct ec_sensors_data {
 	struct sensor_info sensors[ASUS_EC_SENSORS_MAX];
 	/* UTF-16 string to pass to BRxx() WMI function */
 	char read_arg[((ASUS_WMI_BLOCK_READ_REGISTERS_MAX * 4) + 1) * 2];
@@ -107,14 +107,9 @@ struct ec_info {
 };
 
 struct asus_ec_sensors {
-	struct platform_driver platform_driver;
-	struct platform_device *platform_device;
-
 	struct mutex lock;
-	struct ec_info ec;
-
+	struct ec_sensors_data sensors_data;
 	board_t board;
-	u8 buffer;
 };
 
 static inline void set_sensor_info(struct sensor_info *sensor_info,
@@ -129,7 +124,7 @@ static inline void set_sensor_info(struct sensor_info *sensor_info,
 	*nr_regs += sensor_info->addr.addr.size;
 }
 
-static void fill_board_sensors(struct ec_info *ec, board_t board)
+static void fill_board_sensors(struct ec_sensors_data *ec, board_t board)
 {
 	struct sensor_info *si;
 
@@ -238,9 +233,9 @@ static inline char *hex_utf_16_le_pack(char *buf, u8 byte)
 
 static void asus_wmi_decode_reply_buffer(const u8 *inp, u8 *out)
 {
-	u8 len = ACPI_MIN(ASUS_WMI_MAX_BUF_LEN, inp[0] / 4);
+	int len = ACPI_MIN(ASUS_WMI_MAX_BUF_LEN, inp[0] / 4);
 	const u8 *data = inp + 2;
-	u8 i;
+	unsigned i;
 
 	for (i = 0; i < len; ++i, data += 4) {
 		out[i] = (hex_to_bin(data[0]) << 4) + hex_to_bin(data[2]);
@@ -249,9 +244,8 @@ static void asus_wmi_decode_reply_buffer(const u8 *inp, u8 *out)
 
 static void asus_wmi_encode_registers(u16 *registers, u8 len, char *out)
 {
-	u8 i;
+	unsigned i;
 
-	// assert(len <= 30)
 	*out++ = len * 8;
 	*out++ = 0;
 	for (i = 0; i < len; ++i) {
@@ -260,10 +254,10 @@ static void asus_wmi_encode_registers(u16 *registers, u8 len, char *out)
 	}
 }
 
-static void make_asus_wmi_block_read_query(struct ec_info *ec)
+static void make_asus_wmi_block_read_query(struct ec_sensors_data *ec)
 {
 	u16 registers[ASUS_EC_KNOWN_EC_REGISTERS];
-	u8 i, j, register_idx = 0;
+	int i, j, register_idx = 0;
 	/* if we can get values for all the registers in a single query,
 	 * the query will not change from call to call */
 	if (ec->nr_registers <= ASUS_WMI_BLOCK_READ_REGISTERS_MAX &&
@@ -284,7 +278,7 @@ static void make_asus_wmi_block_read_query(struct ec_info *ec)
 	asus_wmi_encode_registers(registers, ec->nr_registers, ec->read_arg);
 }
 
-static int asus_ec_block_read(u32 method_id, const char *query, u8 *out)
+static int asus_ec_block_read(const struct device* dev, u32 method_id, const char *query, u8 *out)
 {
 	struct acpi_buffer input;
 	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER,
@@ -304,7 +298,7 @@ static int asus_ec_block_read(u32 method_id, const char *query, u8 *out)
 
 	obj = output.pointer;
 	if (!obj || obj->type != ACPI_TYPE_BUFFER) {
-		pr_err("unexpected reply type from ASUS ACPI code");
+		dev_err(dev, "unexpected reply type from ASUS ACPI code");
 		acpi_os_free(output.pointer);
 		return -EIO;
 	}
@@ -313,15 +307,16 @@ static int asus_ec_block_read(u32 method_id, const char *query, u8 *out)
 	return 0;
 }
 
-static int update_ec_sensors(struct ec_info *ec)
+static int update_ec_sensors(const struct device* dev, struct ec_sensors_data *ec)
 {
 	struct sensor_info *si;
 	u32 value;
 	int status;
-	u8 i_sensor, read_reg_ct, i_sensor_register;
+	unsigned i_sensor, read_reg_ct, i_sensor_register;
 
 	make_asus_wmi_block_read_query(ec);
-	status = asus_ec_block_read(METHODID_BLOCK_READ_EC, ec->read_arg,
+	status = asus_ec_block_read(dev, METHODID_BLOCK_READ_EC,
+				    ec->read_arg,
 				    ec->read_buffer);
 	if (status)
 		return status;
@@ -353,7 +348,7 @@ static int scale_sensor_value(u32 value, int data_type)
 	}
 }
 
-static u8 find_ec_sensor_index(const struct ec_info *ec,
+static u8 find_ec_sensor_index(const struct ec_sensors_data *ec,
 			       enum hwmon_sensor_types type, int channel)
 {
 	u8 i;
@@ -369,22 +364,22 @@ static u8 find_ec_sensor_index(const struct ec_info *ec,
 	return 0xFF;
 }
 
-static int get_cached_value_or_update(int sensor_index,
-				      struct asus_ec_sensors *state, u32 *value)
+static int get_cached_value_or_update(const struct device* dev, int sensor_index,
+				      struct ec_sensors_data *state, u32 *value)
 {
 	int ret;
-	if (time_after(jiffies, state->ec.last_updated + HZ)) {
-		ret = update_ec_sensors(&state->ec);
+	if (time_after(jiffies, state->last_updated + HZ)) {
+		ret = update_ec_sensors(dev, state);
 
 		if (ret) {
-			pr_err("update_ec_sensors() failure\n");
+			dev_err(dev, "update_ec_sensors() failure\n");
 			return -EIO;
 		}
 
-		state->ec.last_updated = jiffies;
+		state->last_updated = jiffies;
 	}
 
-	*value = state->ec.sensors[sensor_index].cached_value;
+	*value = state->sensors[sensor_index].cached_value;
 	return 0;
 }
 
@@ -399,15 +394,15 @@ static int asus_wmi_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	u32 value = 0;
 
 	struct asus_ec_sensors *state = dev_get_drvdata(dev);
-	u8 sidx = find_ec_sensor_index(&state->ec, type, channel);
+	u8 sidx = find_ec_sensor_index(&state->sensors_data, type, channel);
 
 	mutex_lock(&state->lock);
 
-	ret = get_cached_value_or_update(sidx, state, &value);
+	ret = get_cached_value_or_update(dev, sidx, &state->sensors_data, &value);
 	mutex_unlock(&state->lock);
 
 	if (!ret) {
-		*val = scale_sensor_value(value, state->ec.sensors[sidx].type);
+		*val = scale_sensor_value(value, state->sensors_data.sensors[sidx].type);
 	}
 
 	return ret;
@@ -418,8 +413,8 @@ static int asus_wmi_hwmon_read_string(struct device *dev,
 				      int channel, const char **str)
 {
 	struct asus_ec_sensors *state = dev_get_drvdata(dev);
-	u8 sensor_index = find_ec_sensor_index(&state->ec, type, channel);
-	*str = state->ec.sensors[sensor_index].label;
+	u8 sensor_index = find_ec_sensor_index(&state->sensors_data, type, channel);
+	*str = state->sensors_data.sensors[sensor_index].label;
 
 	return 0;
 }
@@ -429,7 +424,7 @@ static umode_t asus_wmi_hwmon_is_visible(const void *drvdata,
 					 int channel)
 {
 	const struct asus_ec_sensors *state = drvdata;
-	return find_ec_sensor_index(&state->ec, type, channel) != 0xFF ?
+	return find_ec_sensor_index(&state->sensors_data, type, channel) != 0xFF ?
 			     S_IRUGO :
 			     0;
 }
@@ -464,49 +459,49 @@ static struct hwmon_chip_info asus_wmi_chip_info = {
 	.info = NULL,
 };
 
-static int __init supported_board_index(void)
+static int __init supported_board_index(const struct device* dev)
 {
 	const struct dmi_system_id* dmi_entry;
 	u32 version = 0;
 
 	dmi_entry = dmi_first_match(asus_wmi_ec_dmi_table);
 	if (!dmi_entry) {
-		pr_info("Unsupported board");
+		dev_info(dev, "Unsupported board");
 		return -ENODEV;
 	}
 
 	if (get_version(&version)) {
-		pr_err("Error getting version\n");
+		dev_err(dev, "Error getting version");
 		return -ENODEV;
 	}
 
 	return dmi_entry - asus_wmi_ec_dmi_table;
 }
 
-static int __init configure_sensor_setup(struct asus_ec_sensors *asus_ec_sensors)
+static int __init configure_sensor_setup(struct platform_device *pdev)
 {
-	int i;
+	struct asus_ec_sensors* asus_ec_sensors = platform_get_drvdata(pdev);
 	int nr_count[hwmon_max] = { 0 }, nr_types = 0;
 	struct device *hwdev;
-	struct device *dev = &asus_ec_sensors->platform_device->dev;
+	struct device *dev = &pdev->dev;
 	struct hwmon_channel_info *asus_wmi_hwmon_chan;
 	const struct hwmon_channel_info **ptr_asus_wmi_ci;
 	const struct hwmon_chip_info *chip_info;
 	const struct sensor_info *si;
 	enum hwmon_sensor_types type;
+	unsigned i;
 
-	asus_ec_sensors->board = supported_board_index();
+	asus_ec_sensors->board = supported_board_index(dev);
 	if (asus_ec_sensors->board < 0) {
 		return -ENODEV;
 	}
 
-	asus_ec_sensors->buffer = -1;
 	mutex_init(&asus_ec_sensors->lock);
 
-	fill_board_sensors(&asus_ec_sensors->ec, asus_ec_sensors->board);
+	fill_board_sensors(&asus_ec_sensors->sensors_data, asus_ec_sensors->board);
 
-	for (i = 0; i < asus_ec_sensors->ec.nr_sensors; ++i) {
-		si = &asus_ec_sensors->ec.sensors[i];
+	for (i = 0; i < asus_ec_sensors->sensors_data.nr_sensors; ++i) {
+		si = &asus_ec_sensors->sensors_data.sensors[i];
 		if (!nr_count[si->type])
 			++nr_types;
 		++nr_count[si->type];
@@ -538,9 +533,9 @@ static int __init configure_sensor_setup(struct asus_ec_sensors *asus_ec_sensors
 		*ptr_asus_wmi_ci++ = asus_wmi_hwmon_chan++;
 	}
 
-	pr_info("board has %d EC sensors that span %d registers",
-		asus_ec_sensors->ec.nr_sensors,
-		asus_ec_sensors->ec.nr_registers);
+	dev_info(dev, "board has %d EC sensors that span %d registers",
+		asus_ec_sensors->sensors_data.nr_sensors,
+		asus_ec_sensors->sensors_data.nr_registers);
 
 	hwdev = devm_hwmon_device_register_with_info(
 		dev, "asus-wmi-ec-sensors", asus_ec_sensors, chip_info, NULL);
@@ -559,11 +554,10 @@ static int asus_wmi_probe(struct platform_device *pdev)
 	}
 
 	if (!wmi_has_guid(ASUSWMI_MGMT2_GUID)) {
-		pr_info("ASUSHW GUID not found\n");
+		dev_info(&pdev->dev, "ASUSHW GUID not found\n");
 		return -ENODEV;
 	}
 
-	pr_info("driver loaded\n");
 	return 0;
 }
 
@@ -593,12 +587,9 @@ static int __init asus_wmi_ec_init(void)
 	if (!state)
 		return -ENOMEM;
 
-	state->platform_device = asus_wmi_sensors_platform_device;
-	state->platform_driver = asus_wmi_sensors_platform_driver;
+	platform_set_drvdata(asus_wmi_sensors_platform_device, state);
 
-	platform_set_drvdata(state->platform_device, state);
-
-	return configure_sensor_setup(state);
+	return configure_sensor_setup(asus_wmi_sensors_platform_device);
 }
 
 static void __exit asus_wmi_ec_exit(void)
