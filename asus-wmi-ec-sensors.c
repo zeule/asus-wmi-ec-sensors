@@ -57,7 +57,8 @@ enum board {
 	BOARD_R_C8H, // ROG Crosshair VIII Hero
 	BOARD_R_C8DH, // ROG Crosshair VIII Dark Hero
 	BOARD_R_C8F, // ROG Crosshair VIII Formula
-	BOARD_RS_X570_E_G // ROG STRIX X570-E GAMING
+	BOARD_RS_X570_E_G, // ROG STRIX X570-E GAMING
+	BOARD_RS_B550_E_G, // ROG STRIX B550-E GAMING
 };
 
 #define DMI_EXACT_MATCH_ASUS_BOARD_NAME(name) \
@@ -73,6 +74,7 @@ static struct dmi_system_id asus_wmi_ec_dmi_table[] __initdata = {
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII DARK HERO"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG CROSSHAIR VIII FORMULA"),
 	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX X570-E GAMING"),
+	DMI_EXACT_MATCH_ASUS_BOARD_NAME("ROG STRIX B550-E GAMING"),
 	{}
 };
 
@@ -133,6 +135,7 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 	ec->nr_registers = 0;
 
 	switch (board) {
+	case BOARD_RS_B550_E_G:
 	case BOARD_RS_X570_E_G:
 	case BOARD_R_C8H:
 	case BOARD_R_C8DH:
@@ -152,6 +155,19 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 		set_sensor_info(si++, "VRM", hwmon_temp,
 				make_sensor_address(1, 0x00, 0x3E),
 				&ec->nr_registers);
+		set_sensor_info(si++, "CPU_Opt", hwmon_fan,
+				make_sensor_address(2, 0x00, 0xB0),
+				&ec->nr_registers);
+		set_sensor_info(si++, "CPU", hwmon_curr,
+				make_sensor_address(1, 0x00, 0xF4),
+				&ec->nr_registers);
+	}
+
+	switch (board) {
+	case BOARD_RS_X570_E_G:
+	case BOARD_R_C8H:
+	case BOARD_R_C8DH:
+	case BOARD_R_C8F:
 		set_sensor_info(si++, "CPU_Opt", hwmon_fan,
 				make_sensor_address(2, 0x00, 0xB0),
 				&ec->nr_registers);
