@@ -155,12 +155,6 @@ static void fill_board_sensors(struct ec_info *ec, board_t board)
 		set_sensor_info(si++, "VRM", hwmon_temp,
 				make_sensor_address(1, 0x00, 0x3E),
 				&ec->nr_registers);
-		set_sensor_info(si++, "CPU_Opt", hwmon_fan,
-				make_sensor_address(2, 0x00, 0xB0),
-				&ec->nr_registers);
-		set_sensor_info(si++, "CPU", hwmon_curr,
-				make_sensor_address(1, 0x00, 0xF4),
-				&ec->nr_registers);
 	}
 
 	switch (board) {
