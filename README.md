@@ -32,12 +32,11 @@ the following changes to the source code need to be made:
 1. Add your board name to the `asus_wmi_ec_dmi_table` array and a new enum value to the `board` enum. You can find
 the board name in `/sys/class/dmi/id/board_name` or using `dmidecode`.
 
-2. Modify the `fill_board_sensors()` function to handle your board. If your board has more sensors than 
-`ASUS_EC_SENSORS_MAX` modify that too. If the available sensors span more than `ASUS_EC_KNOWN_EC_REGISTERS`
-byte registers, increase that value too. If the latter value turns out to be higher than `ASUS_WMI_BLOCK_READ_REGISTERS_MAX`,
-a rewrite of the `update_ec_sensors()` will be required.
+2. Add new entry to the `known_board_sensors` array where list sensors for the board. If the board sensors
+span more than `ASUS_WMI_BLOCK_READ_REGISTERS_MAX`, a rewrite of the `update_ec_sensors()` will be required.
 
-For each sensor you need to provide its size in bytes (for example, RPM counters span two single-byte registers), 
+3. If you discover new sensors, modify the `known_ec_sensor` enum and add it to the `known_ec_sensors` array.
+For each sensor you need to provide its size in bytes (for example, RPM counters span two single-byte registers),
 its bank index and register index within the bank. If the sensor spans two or more registers, provide the 
 first one (the smaller number).
 
