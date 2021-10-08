@@ -214,11 +214,12 @@ static int find_ec_sensor_index(const struct ec_sensors_data *ec,
 {
 	unsigned i;
 
-	for (i = 0; i < ec->nr_sensors; ++i, --channel) {
+	for (i = 0; i < ec->nr_sensors; ++i) {
 		if (get_sensor_info(ec, i)->type == type) {
 			if (channel == 0) {
 				return i;
 			}
+			--channel;
 		}
 	}
 	return -EDOM;
@@ -359,10 +360,10 @@ static void update_sensor_values(struct ec_sensors_data *ec, u8 *data)
 			s->cached_value = *data;
 			break;
 		case 2:
-			s->cached_value = get_unaligned_le16(data);
+			s->cached_value = get_unaligned_be16(data);
 			break;
 		case 4:
-			s->cached_value = get_unaligned_le32(data);
+			s->cached_value = get_unaligned_be32(data);
 			break;
 		}
 		data += si->addr.components.size;
