@@ -2,8 +2,13 @@
 
 Linux HWMON sensors driver for ASUS motherboards to read sensors from the embedded controller
 
-Many ASUS motherboards do not publish all the available sensors via the Super I/O chip but the 
-missing ones are available through the embedded controller (EC) registers.
+## This driver is available in the mainline kernel 5.16
+
+Thanks to @0lvin efforts this driver was mainlined. Please use the in-kernel version or the enhanced one [here](https://github.com/zeule/asus-ec-sensors).
+
+## Overview
+
+Many ASUS motherboards do not publish all the available sensors via the Super I/O chip but some of them are available through the embedded controller (EC) registers.
 
 This driver implements reading those sensor data via the WMI method `BREC`, which is known to be present
 in all ASUS motherboards based on the AMD 500 series chipsets (and probably is available in other
